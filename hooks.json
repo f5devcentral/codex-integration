@@ -1,0 +1,42 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 $HOME/.codex/hooks/f5_guardrails/user_prompt_submit.py",
+            "timeout": 15,
+            "statusMessage": "F5 Guardrails: scanning prompt"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 $HOME/.codex/hooks/f5_guardrails/pre_tool_use.py",
+            "timeout": 15,
+            "statusMessage": "F5 Guardrails: scanning tool input"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 $HOME/.codex/hooks/f5_guardrails/post_tool_use.py",
+            "timeout": 15,
+            "statusMessage": "F5 Guardrails: scanning output"
+          }
+        ]
+      }
+    ]
+  }
+}
