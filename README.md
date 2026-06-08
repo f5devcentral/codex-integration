@@ -171,10 +171,12 @@ Deliver scripts to `managed_dir` separately via MDM (Jamf, Intune), internal pac
 
 ```
 codex/
-├── README.md               # This file
-├── requirements.txt        # Python dependencies
-├── install.sh              # One-command installer
-├── hooks.json              # Codex hook registration config
+├── README.md                # This file
+├── requirements.txt         # Python dependencies
+├── install.sh               # macOS/Linux installer
+├── install.ps1              # Windows installer (PowerShell)
+├── hooks.json               # Hook registration config (macOS/Linux)
+├── hooks-windows.json       # Hook registration config (Windows)
 └── hooks/
     ├── f5_guardrails_client.py   # Shared F5 Scan API client
     ├── user_prompt_submit.py     # Scans user prompts
@@ -200,9 +202,103 @@ open -a Codex
 
 **Desktop app rendering note:** When a `UserPromptSubmit` hook blocks a prompt, the CLI shows the block reason and scanner details. The desktop app silently stops the prompt — the model never responds, but no visual feedback explains why. The security control is enforced; the UX feedback is a Codex app limitation.
 
+## Windows Setup
+
+Codex runs natively on Windows. The Python hook scripts are cross-platform — only the installer and hook registration differ.
+
+### Prerequisites
+
+- **Python 3.10+** — install via `winget install Python.Python.3` or from [python.org](https://www.python.org/downloads/). On Windows the command is `python`, not `python3`.
+- **Codex CLI** — `npm i -g @openai/codex` or `winget install openai.codex`
+
+### 1. Set your F5 API token
+
+```powershell
+$env:F5_GUARDRAILS_API_TOKEN = "your-token-here"
+```
+
+To persist across sessions, add it as a system or user environment variable:
+
+1. Open **System Properties** → **Advanced** → **Environment Variables**
+2. Under **User variables**, click **New**
+3. Variable name: `F5_GUARDRAILS_API_TOKEN`, Variable value: your token
+
+### 2. Run the installer
+
+```powershell
+git clone <this-repo> && cd codex
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+The installer:
+- Copies hook scripts to `%USERPROFILE%\.codex\hooks\f5_guardrails\`
+- Installs `hooks.json` (Windows version) to `%USERPROFILE%\.codex\hooks.json`
+- Enables `codex_hooks = true` in `%USERPROFILE%\.codex\config.toml`
+- Runs a smoke test scan against F5
+
+### 3. Restart Codex
+
+Close and reopen Codex (CLI, app, or IDE extension). Hooks load at startup.
+
+### 4. Inline TOML config (recommended)
+
+For reliable hook discovery, add inline hook definitions to `%USERPROFILE%\.codex\config.toml`. Use `command_windows` for the Windows command:
+
+```toml
+[features]
+codex_hooks = true
+
+[[hooks.UserPromptSubmit]]
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command_windows = "python %USERPROFILE%\\.codex\\hooks\\f5_guardrails\\user_prompt_submit.py"
+timeout = 15
+statusMessage = "F5 Guardrails: scanning prompt"
+
+[[hooks.PreToolUse]]
+matcher = "Bash|apply_patch"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command_windows = "python %USERPROFILE%\\.codex\\hooks\\f5_guardrails\\pre_tool_use.py"
+timeout = 15
+statusMessage = "F5 Guardrails: scanning tool input"
+
+[[hooks.PostToolUse]]
+matcher = "Bash|apply_patch"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command_windows = "python %USERPROFILE%\\.codex\\hooks\\f5_guardrails\\post_tool_use.py"
+timeout = 15
+statusMessage = "F5 Guardrails: scanning output"
+```
+
+### Windows Enterprise Enforcement
+
+System-level requirements on Windows live at `%ProgramData%\OpenAI\Codex\requirements.toml`. Use the same TOML structure as the macOS/Linux `requirements.toml`, but with `command_windows` for hook commands:
+
+```toml
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command_windows = "python C:\\enterprise\\codex-hooks\\f5_guardrails\\user_prompt_submit.py"
+timeout = 15
+statusMessage = "F5 Guardrails: scanning prompt"
+```
+
+Deliver hook scripts to the managed directory via **Intune**, **SCCM**, or **Group Policy**.
+
+Precedence: cloud-managed > system-level (`%ProgramData%`)
+
+### Windows known limitation
+
+On native Windows, `PreToolUse` hooks do not fire for shell commands — Codex dispatches them as `command_execution` events rather than `Bash` tool calls. This means **pre-execution command scanning is not active on Windows**. Prompt scanning (`UserPromptSubmit`) and output scanning (`PostToolUse`) work normally. This is an upstream Codex issue tracked at [openai/codex#24453](https://github.com/openai/codex/issues/24453).
+
 ## Known Limitations
 
 - **Hook coverage gaps:** `read_file` and `grep` tools don't emit hook events yet (tracked at [openai/codex#18491](https://github.com/openai/codex/issues/18491)). Bash invocations of `cat`, `grep`, etc. are covered.
+- **Windows PreToolUse gap:** On native Windows, shell commands dispatch as `command_execution` events — not `Bash` tool calls — and `PreToolUse` hooks do not fire for them, even with `matcher: "*"`. This means **pre-execution scanning of shell commands does not work on Windows**. `UserPromptSubmit` (prompt scanning) and `PostToolUse` (output scanning) are unaffected. Tracked upstream at [openai/codex#24453](https://github.com/openai/codex/issues/24453).
 - **No input rewrite:** Hooks can block but not modify tool input — F5's redact mode is used for logging/reporting only.
 - **Codex Cloud:** Web-based Codex runs in OpenAI containers — local hooks don't reach it. Use the Compliance API for post-hoc analysis.
 - **Latency:** Each hook adds ~50-200ms for F5 SaaS round-trips. Configurable timeout prevents stalls.
