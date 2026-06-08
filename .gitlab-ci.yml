@@ -4,8 +4,7 @@ stages:
 test-windows-install:
   stage: test
   tags:
-    - shared-windows
-    - windows-1809
+    - saas-windows-medium-amd64
   rules:
     - changes:
         - install.ps1
