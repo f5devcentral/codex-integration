@@ -1,0 +1,111 @@
+name: Test Windows Installer
+
+on:
+  push:
+    paths:
+      - 'install.ps1'
+      - 'hooks-windows.json'
+      - 'hooks/**'
+      - '.github/workflows/test-windows-install.yml'
+  pull_request:
+    paths:
+      - 'install.ps1'
+      - 'hooks-windows.json'
+      - 'hooks/**'
+      - '.github/workflows/test-windows-install.yml'
+  workflow_dispatch:
+
+jobs:
+  windows-install:
+    runs-on: windows-latest
+    name: Windows installer smoke test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: pip install requests python-dotenv
+
+      - name: Run installer (no API token — fail-open path)
+        shell: pwsh
+        run: .\install.ps1
+
+      - name: Verify hook scripts installed
+        shell: pwsh
+        run: |
+          $hooksDir = Join-Path $env:USERPROFILE ".codex\hooks\f5_guardrails"
+          $expected = @(
+            "f5_guardrails_client.py",
+            "user_prompt_submit.py",
+            "pre_tool_use.py",
+            "post_tool_use.py"
+          )
+          foreach ($file in $expected) {
+            $path = Join-Path $hooksDir $file
+            if (-not (Test-Path $path)) {
+              throw "Missing hook script: $path"
+            }
+          }
+          Write-Host "All hook scripts present in $hooksDir"
+
+      - name: Verify hooks.json installed
+        shell: pwsh
+        run: |
+          $hooksJson = Join-Path $env:USERPROFILE ".codex\hooks.json"
+          if (-not (Test-Path $hooksJson)) {
+            throw "hooks.json not found at $hooksJson"
+          }
+          $null = Get-Content $hooksJson -Raw | ConvertFrom-Json
+          Write-Host "hooks.json is valid JSON at $hooksJson"
+
+      - name: Verify config.toml created with codex_hooks enabled
+        shell: pwsh
+        run: |
+          $configFile = Join-Path $env:USERPROFILE ".codex\config.toml"
+          if (-not (Test-Path $configFile)) {
+            throw "config.toml not found at $configFile"
+          }
+          $content = Get-Content $configFile -Raw
+          if ($content -notmatch "codex_hooks\s*=\s*true") {
+            throw "codex_hooks = true not found in config.toml"
+          }
+          Write-Host "config.toml has codex_hooks = true"
+
+      - name: Verify hooks.json uses Windows paths
+        shell: pwsh
+        run: |
+          $hooksJson = Join-Path $env:USERPROFILE ".codex\hooks.json"
+          $content = Get-Content $hooksJson -Raw
+          if ($content -notmatch "python %USERPROFILE%") {
+            throw "hooks.json does not contain expected Windows command pattern"
+          }
+          if ($content -match "/usr/bin/python3") {
+            throw "hooks.json contains Unix paths — wrong file was installed"
+          }
+          Write-Host "hooks.json contains correct Windows paths"
+
+      - name: Test hook scripts are importable
+        shell: pwsh
+        run: |
+          $hooksDir = Join-Path $env:USERPROFILE ".codex\hooks\f5_guardrails"
+          python -c @"
+          import sys
+          sys.path.insert(0, r'$hooksDir')
+          from f5_guardrails_client import scan, read_hook_input, emit_json
+          print('All hook modules import successfully')
+          "@
+
+      - name: Test idempotent re-install
+        shell: pwsh
+        run: |
+          .\install.ps1
+          $backup = Join-Path $env:USERPROFILE ".codex\hooks.json.bak"
+          if (-not (Test-Path $backup)) {
+            throw "Re-install did not create hooks.json.bak"
+          }
+          Write-Host "Idempotent re-install passed — backup created"
