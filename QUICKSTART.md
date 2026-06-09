@@ -2,6 +2,8 @@
 
 Get from nothing to runtime-secured Codex in under 10 minutes.
 
+> **Windows?** See [QUICKSTART-WINDOWS.md](QUICKSTART-WINDOWS.md) for the dedicated Windows guide.
+
 ---
 
 ## What You're Setting Up
@@ -18,8 +20,8 @@ Every prompt you type, every shell command Codex generates, and every tool outpu
 
 ## Prerequisites
 
-- [ ] **Codex** installed — `brew install codex` (macOS), `npm i -g @openai/codex`, or `winget install openai.codex` (Windows)
-- [ ] **Python 3.9+** with `requests` package — `pip install requests` (on Windows the command is `python`, not `python3`)
+- [ ] **Codex** installed — `brew install codex` (macOS) or `npm i -g @openai/codex`
+- [ ] **Python 3.9+** with `requests` package — `pip install requests`
 - [ ] **F5 AI Guardrails account** — [Get started](https://docs.aisecurity.f5.com/api-docs/first-steps.html)
 - [ ] **F5 API token** — Create one in the AI Security platform under your account settings
 - [ ] **At least one scanner package enabled** — Prompt Injection and PII Detection recommended as baseline
@@ -37,8 +39,6 @@ cd codex-integration
 
 ## Step 2: Set Your F5 API Token
 
-**macOS/Linux:**
-
 ```bash
 # Add to ~/.zshrc (or ~/.bashrc):
 export F5_GUARDRAILS_API_TOKEN="your-token-here"
@@ -49,45 +49,27 @@ launchctl setenv F5_GUARDRAILS_API_TOKEN "$F5_GUARDRAILS_API_TOKEN"
 
 Reload your shell: `source ~/.zshrc`
 
-**Windows (PowerShell):**
-
-```powershell
-$env:F5_GUARDRAILS_API_TOKEN = "your-token-here"
-```
-
-To persist across sessions: **System Properties** → **Advanced** → **Environment Variables** → add `F5_GUARDRAILS_API_TOKEN` as a user variable.
-
 ---
 
 ## Step 3: Run the Installer
-
-**macOS/Linux:**
 
 ```bash
 chmod +x install.sh
 ./install.sh
 ```
 
-**Windows (PowerShell):**
-
-```powershell
-powershell -ExecutionPolicy Bypass -File install.ps1
-```
-
 You should see:
 ```
-[OK] Python found
-[OK] Python 'requests' module available
-[OK] F5_GUARDRAILS_API_TOKEN is set
-[OK] Hook scripts installed
-[OK] hooks.json installed
-[OK] codex_hooks enabled in config.toml
-[OK] Smoke test passed: cleared (XXXms)
+[✓] Python3 found
+[✓] Python 'requests' module available
+[✓] F5_GUARDRAILS_API_TOKEN is set
+[✓] Hook scripts installed
+[✓] hooks.json installed
+[✓] codex_hooks enabled in config.toml
+[✓] Smoke test passed: cleared (XXXms)
 ```
 
-**Important:** After install, add the inline hook definitions to your Codex config for reliable discovery.
-
-**macOS/Linux** — open `~/.codex/config.toml`:
+**Important:** After install, add the inline hook definitions to your Codex config for reliable discovery. Open `~/.codex/config.toml` and add under `[features]`:
 
 ```toml
 [features]
@@ -121,39 +103,6 @@ statusMessage = "F5 Guardrails: scanning output"
 ```
 
 Replace `YOUR_USERNAME` with your actual macOS username. Use absolute paths — no `~` tildes.
-
-**Windows** — open `%USERPROFILE%\.codex\config.toml` and use `command_windows`:
-
-```toml
-[features]
-codex_hooks = true
-
-[[hooks.UserPromptSubmit]]
-
-[[hooks.UserPromptSubmit.hooks]]
-type = "command"
-command_windows = "python %USERPROFILE%\\.codex\\hooks\\f5_guardrails\\user_prompt_submit.py"
-timeout = 15
-statusMessage = "F5 Guardrails: scanning prompt"
-
-[[hooks.PreToolUse]]
-matcher = "Bash|apply_patch"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command_windows = "python %USERPROFILE%\\.codex\\hooks\\f5_guardrails\\pre_tool_use.py"
-timeout = 15
-statusMessage = "F5 Guardrails: scanning tool input"
-
-[[hooks.PostToolUse]]
-matcher = "Bash|apply_patch"
-
-[[hooks.PostToolUse.hooks]]
-type = "command"
-command_windows = "python %USERPROFILE%\\.codex\\hooks\\f5_guardrails\\post_tool_use.py"
-timeout = 15
-statusMessage = "F5 Guardrails: scanning output"
-```
 
 ---
 
@@ -232,11 +181,10 @@ See the full [README](README.md) for the complete `requirements.toml` example an
 |---|---|---|
 | Hook doesn't fire | `hooks.json` not discovered | Use inline TOML in `config.toml` instead |
 | Hook fires but scan doesn't appear in F5 | Wrong field name in hook script | Ensure script reads `prompt` (not `user_prompt`) |
-| Scan works in CLI but not desktop app | GUI app can't see env vars | macOS: `launchctl setenv F5_GUARDRAILS_API_TOKEN "$F5_GUARDRAILS_API_TOKEN"` then relaunch. Windows: add via System Properties > Environment Variables |
+| Scan works in CLI but not desktop app | GUI app can't see env vars | `launchctl setenv F5_GUARDRAILS_API_TOKEN "$F5_GUARDRAILS_API_TOKEN"` then relaunch |
 | Desktop app blocks but shows no message | App doesn't render hook `systemMessage` | Known limitation — security is enforced, UX feedback is not |
-| `command not found: python3` in hook | Codex subprocess can't find Python | macOS/Linux: use `/usr/bin/python3` (absolute path). Windows: ensure `python` is in PATH (`winget install Python.Python.3`) |
+| `command not found: python3` in hook | Codex subprocess can't find Python | Use `/usr/bin/python3` (absolute path) in hook commands |
 | Scan times out | F5 API slow or unreachable | Increase `F5_GUARDRAILS_TIMEOUT` or check network |
-| PreToolUse hook doesn't fire on Windows | Upstream Codex bug — Windows `command_execution` events don't emit `PreToolUse` hooks | Known issue ([#24453](https://github.com/openai/codex/issues/24453)). Prompt and output scanning still work. Pre-execution scanning requires the upstream fix |
 
 ---
 
