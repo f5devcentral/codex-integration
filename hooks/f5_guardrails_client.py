@@ -5,6 +5,8 @@ Wraps the F5 Scan API (/backend/v1/scans) with:
 - Environment-variable-based configuration
 - Configurable fail-open / fail-closed behavior
 - Timeout handling and structured error responses
+- Optional CA bundle support for TLS inspection tools such as Zscaler
+- Optional client certificate support for mTLS
 - Structured logging to stderr (never stdout — Codex reads stdout for decisions)
 """
 
@@ -13,7 +15,8 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
 try:
     import requests
@@ -46,6 +49,71 @@ def _log(level: str, msg: str) -> None:
     threshold = _LOG_LEVELS.get(F5_LOG_LEVEL, 2)
     if _LOG_LEVELS.get(level, 2) >= threshold:
         print(f"[f5-guardrails] [{level.upper()}] {msg}", file=sys.stderr)
+
+
+def _env_file(name: str) -> str | None:
+    """
+    Return a validated file path from an environment variable.
+
+    Empty variables are ignored. Missing files are logged and ignored so the
+    hook can still honor the configured fail-open / fail-closed behavior when
+    requests raises a TLS or connection error.
+    """
+    value = os.getenv(name, "").strip()
+    if not value:
+        return None
+
+    path = Path(value).expanduser()
+    if not path.is_file():
+        _log("error", f"{name} points to a missing file: {path}")
+        return None
+
+    return str(path)
+
+
+def _requests_tls_kwargs() -> dict[str, Any]:
+    """
+    Build TLS options for requests from environment variables.
+
+    CA trust bundle, used for Zscaler or other TLS inspection roots:
+      F5_GUARDRAILS_CA_BUNDLE
+      REQUESTS_CA_BUNDLE
+      SSL_CERT_FILE
+
+    Optional mTLS client certificate:
+      F5_GUARDRAILS_CLIENT_CERT
+      F5_GUARDRAILS_CLIENT_KEY
+
+    If F5_GUARDRAILS_CLIENT_KEY is omitted, F5_GUARDRAILS_CLIENT_CERT may point
+    to a combined PEM containing both the client certificate and private key.
+    """
+    kwargs: dict[str, Any] = {}
+
+    ca_bundle = (
+        _env_file("F5_GUARDRAILS_CA_BUNDLE")
+        or _env_file("REQUESTS_CA_BUNDLE")
+        or _env_file("SSL_CERT_FILE")
+    )
+    if ca_bundle:
+        kwargs["verify"] = ca_bundle
+        _log("debug", f"Using CA bundle: {ca_bundle}")
+
+    client_cert = _env_file("F5_GUARDRAILS_CLIENT_CERT")
+    client_key = _env_file("F5_GUARDRAILS_CLIENT_KEY")
+
+    if client_cert and client_key:
+        kwargs["cert"] = (client_cert, client_key)
+        _log("debug", "Using mTLS client certificate and key.")
+    elif client_cert:
+        kwargs["cert"] = client_cert
+        _log("debug", "Using mTLS combined client certificate PEM.")
+    elif client_key:
+        _log(
+            "warn",
+            "F5_GUARDRAILS_CLIENT_KEY is set but F5_GUARDRAILS_CLIENT_CERT is not; ignoring client key.",
+        )
+
+    return kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +181,8 @@ def scan(text: str, context: str = "", metadata: Optional[dict] = None) -> ScanR
     if metadata:
         payload["externalMetadata"] = metadata
 
+    tls_kwargs = _requests_tls_kwargs()
+
     _log("debug", f"Scanning [{context}]: {len(text)} chars → {SCAN_ENDPOINT}")
 
     start = time.monotonic()
@@ -122,6 +192,7 @@ def scan(text: str, context: str = "", metadata: Optional[dict] = None) -> ScanR
             headers=headers,
             json=payload,
             timeout=F5_TIMEOUT,
+            **tls_kwargs,
         )
     except requests.Timeout:
         duration = (time.monotonic() - start) * 1000
