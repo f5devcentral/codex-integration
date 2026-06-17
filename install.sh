@@ -40,13 +40,13 @@ if ! command -v python3 &>/dev/null; then
 fi
 info "Python3 found: $(python3 --version)"
 
-# Check requests module
-if ! python3 -c "import requests" 2>/dev/null; then
-    warn "Python 'requests' module not found. Installing..."
-    pip3 install -q requests python-dotenv
+# Check Python dependencies
+if ! python3 -c "import requests, truststore" 2>/dev/null; then
+    warn "Python dependencies not found. Installing..."
+    pip3 install -q requests python-dotenv truststore
     info "Dependencies installed."
 else
-    info "Python 'requests' module available."
+    info "Python dependencies available."
 fi
 
 # Check API token
@@ -176,6 +176,7 @@ echo "    F5_GUARDRAILS_FAIL_MODE      (default: open — set to 'closed' for st
 echo "    F5_GUARDRAILS_POST_STRICT    (default: false — set to 'true' to block on flagged output)"
 echo "    F5_GUARDRAILS_LOG_LEVEL      (default: warn — debug|info|warn|error)"
 echo "    F5_GUARDRAILS_MAX_SCAN_LENGTH (default: 50000 chars)"
+echo "    F5_GUARDRAILS_USE_SYSTEM_CERT_STORE (default: auto — Windows Cert Store when available)"
 echo ""
 echo "  Restart Codex (CLI, app, or IDE extension) for hooks to take effect."
 echo "══════════════════════════════════════════════════════════════"

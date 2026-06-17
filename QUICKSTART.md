@@ -30,21 +30,21 @@ Tool output → PostToolUse hook → F5 Scan API → warn/block
 
 - Codex installed.
 - Python 3.10+ installed.
-- Python `requests` package installed.
+- Python packages from `requirements.txt` installed.
 - F5 AI Guardrails account.
 - F5 API token.
 - At least one scanner package enabled in your F5 project.
 
-Install `requests`:
+Install dependencies:
 
 ```bash
-python -m pip install requests
+python -m pip install -r requirements.txt
 ```
 
 On macOS/Linux, use `python3` if needed:
 
 ```bash
-python3 -m pip install requests
+python3 -m pip install -r requirements.txt
 ```
 
 ---
@@ -185,6 +185,7 @@ This prints:
 - Python executable and version.
 - OpenSSL version used by Python.
 - CA-related environment variables.
+- system certificate store status, if `truststore` is available.
 - `certifi` CA bundle path, if available.
 - Verified TLS handshake result.
 - TLS version and cipher.
@@ -212,7 +213,7 @@ then Python reached the F5 AI Guardrails endpoint, but it could not build a trus
 Common causes:
 
 1. A corporate proxy or TLS inspection device is presenting a certificate signed by an internal CA.
-2. Python `requests` is using the `certifi` CA bundle instead of the Windows or macOS trust store.
+2. Python `requests` is using the `certifi` CA bundle instead of the operating system trust store.
 3. The server is not presenting the full intermediate certificate chain.
 4. The local Python environment has an outdated or broken CA bundle.
 
@@ -240,7 +241,26 @@ openssl s_client `
   -verify_return_error
 ```
 
-If your organization uses an internal corporate root CA, export the CA as PEM and point Python to it:
+On Windows, the hooks and smoke test use `truststore` by default when it is installed. This lets Python use the Windows Cert Store instead of requiring most users to export a `.cer` and create a PEM bundle.
+
+To confirm or force Windows Cert Store usage:
+
+```powershell
+$env:F5_GUARDRAILS_USE_SYSTEM_CERT_STORE = "true"
+python .\smoketest.py --tls-diagnostics
+```
+
+Persist it for Codex GUI:
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  "F5_GUARDRAILS_USE_SYSTEM_CERT_STORE",
+  "true",
+  "User"
+)
+```
+
+If system-store trust is unavailable or your organization requires a dedicated CA bundle, export the internal corporate root CA as PEM and point Python to it:
 
 ```powershell
 $env:REQUESTS_CA_BUNDLE = "$env:USERPROFILE\.codex\certs\corp-root-ca.pem"
@@ -427,8 +447,10 @@ Common outcomes include:
 | `F5_GUARDRAILS_POST_STRICT` | `false` | `true` blocks on flagged output; `false` warns only. |
 | `F5_GUARDRAILS_LOG_LEVEL` | `warn` | Set to `debug` for hook troubleshooting. |
 | `F5_GUARDRAILS_MAX_SCAN_LENGTH` | `50000` | Max characters sent for output scanning. |
+| `F5_GUARDRAILS_USE_SYSTEM_CERT_STORE` | `auto` | `auto` uses the Windows Cert Store through `truststore` when available. Set `true` to force or `false` to disable. |
 | `REQUESTS_CA_BUNDLE` | none | Custom CA bundle for Python requests. |
 | `SSL_CERT_FILE` | none | Custom CA bundle for Python SSL. |
+| `CURL_CA_BUNDLE` | none | Fallback custom CA bundle path. |
 | `SSLKEYLOGFILE` | none | TLS key log file for packet analysis. |
 
 ---
@@ -440,9 +462,9 @@ Common outcomes include:
 | Hook does not fire | `codex_hooks` not enabled or hook config not discovered | Confirm `[features] codex_hooks = true`; use inline TOML hooks. |
 | Hook fires but scan does not appear in F5 | Wrong token, wrong base URL, network issue, or scanner config issue | Run `python smoketest.py`; check F5 dashboard. |
 | Smoke test says `F5_GUARDRAILS_API_TOKEN` is missing | Token not set in this shell | Set the environment variable and reopen the shell if persisted. |
-| `ModuleNotFoundError: requests` | `requests` not installed for the Python Codex is using | Run `python -m pip install requests`. |
+| `ModuleNotFoundError: requests` or `truststore` | Dependencies not installed for the Python Codex is using | Run `python -m pip install -r requirements.txt`. |
 | `ModuleNotFoundError: f5_guardrails_client` | Hook files not copied or Python path wrong | Re-run installer; confirm files under `.codex/hooks/f5_guardrails`. |
-| `CERTIFICATE_VERIFY_FAILED` | Python does not trust the server or corporate TLS issuer | Run `smoketest.py --tls-diagnostics`; configure `REQUESTS_CA_BUNDLE`. |
+| `CERTIFICATE_VERIFY_FAILED` | Python does not trust the server or corporate TLS issuer | Run `smoketest.py --tls-diagnostics`; on Windows use `F5_GUARDRAILS_USE_SYSTEM_CERT_STORE=true` or configure `REQUESTS_CA_BUNDLE`. |
 | CLI works but desktop app does not | GUI app cannot see shell environment variables | macOS: use `launchctl setenv`; Windows: persist user env var and restart app. |
 | Desktop app blocks with no message | App does not render hook stop messages | Confirm in F5 dashboard; use CLI for visible details. |
 | Scan times out | Network/proxy/F5 API reachability issue | Check network; increase `F5_GUARDRAILS_TIMEOUT`. |

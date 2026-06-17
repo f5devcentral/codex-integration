@@ -68,25 +68,29 @@ You should see:
 
 ```
 [OK] Python found: Python 3.x.x (command: python)
-[OK] Python 'requests' module available
+[OK] Python dependencies available
 [OK] F5_GUARDRAILS_API_TOKEN is set
 [OK] Hook scripts installed to C:\Users\YOU\.codex\hooks\f5_guardrails
-[OK] hooks.json installed to C:\Users\YOU\.codex\hooks.json
-[OK] codex_hooks enabled in config.toml
+[OK] Managed requirements installed to C:\ProgramData\OpenAI\Codex\requirements.toml
 [OK] Smoke test passed: cleared (XXXms)
 ```
 
+The installer installs `requests`, `python-dotenv`, and `truststore` when needed. On Windows, `truststore` lets the hooks and smoke test use the Windows Cert Store by default, so managed corporate root CAs usually do not need to be exported to PEM files.
+
 The installer:
 - Copies hook scripts to `%USERPROFILE%\.codex\hooks\f5_guardrails\`
-- Installs `hooks.json` (Windows version) to `%USERPROFILE%\.codex\hooks.json`
-- Enables `codex_hooks = true` in `%USERPROFILE%\.codex\config.toml`
+- Installs managed hook requirements to `%ProgramData%\OpenAI\Codex\requirements.toml`
+- Enables hooks in `%USERPROFILE%\.codex\config.toml`
+- Disables user-level `hooks.json` by default to avoid duplicate scans
 - Runs a smoke test scan against F5 (skipped if no token is set)
 
 ---
 
-## Step 4: Add Inline Hook Config (Recommended)
+## Step 4: Optional Legacy User Hook Config
 
-For reliable hook discovery, add inline hook definitions to `%USERPROFILE%\.codex\config.toml`. Open it in your editor and add:
+The installer configures managed hooks in `%ProgramData%\OpenAI\Codex\requirements.toml` by default. Use user-level inline hook definitions only for legacy CLI testing or environments where managed hooks are not available.
+
+If you need that path, add inline hook definitions to `%USERPROFILE%\.codex\config.toml`:
 
 ```toml
 [features]
@@ -158,8 +162,28 @@ Log into the [F5 AI Security platform](https://www.us1.calypsoai.app). Navigate 
 | `F5_GUARDRAILS_FAIL_MODE` | `open` | `open` = allow on error; `closed` = block on error |
 | `F5_GUARDRAILS_POST_STRICT` | `false` | `true` = block on flagged output; `false` = warn only |
 | `F5_GUARDRAILS_LOG_LEVEL` | `warn` | Set to `debug` for troubleshooting |
+| `F5_GUARDRAILS_USE_SYSTEM_CERT_STORE` | `auto` | `auto` uses the Windows Cert Store through `truststore`; set `true` to force or `false` to disable |
+| `REQUESTS_CA_BUNDLE` | _(none)_ | Optional PEM CA bundle fallback |
+| `SSL_CERT_FILE` | _(none)_ | Optional PEM CA bundle fallback |
 
 Set these in PowerShell (`$env:VAR = "value"`) or persist them via System Properties > Environment Variables.
+
+To force Windows Cert Store usage for the current session:
+
+```powershell
+$env:F5_GUARDRAILS_USE_SYSTEM_CERT_STORE = "true"
+python .\smoketest.py --tls-diagnostics
+```
+
+To persist it for Codex GUI:
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  "F5_GUARDRAILS_USE_SYSTEM_CERT_STORE",
+  "true",
+  "User"
+)
+```
 
 ---
 
@@ -215,6 +239,7 @@ Precedence: cloud-managed > system-level (`%ProgramData%`)
 | Scan works in CLI but not desktop app | Desktop app can't see env vars | Add token via System Properties > Environment Variables, then fully quit and relaunch |
 | Desktop app blocks but shows no message | App doesn't render hook `systemMessage` | Known limitation — security is enforced, UX feedback is not |
 | PreToolUse hook doesn't fire | Upstream Codex bug on Windows | [#24453](https://github.com/openai/codex/issues/24453) — prompt and output scanning still work |
+| Certificate verification fails | Python cannot build a trusted chain | Run `python .\smoketest.py --tls-diagnostics`; keep `F5_GUARDRAILS_USE_SYSTEM_CERT_STORE=auto` or set it to `true` |
 | Scan times out | F5 API slow or unreachable | Increase `F5_GUARDRAILS_TIMEOUT` or check network |
 | Installer fails on `pip install` | pip not in PATH | Run `python -m ensurepip --upgrade` first |
 

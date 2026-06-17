@@ -59,21 +59,21 @@ Install once into your local Codex configuration and the hooks are available to 
   - npm: `npm i -g @openai/codex`
   - Windows: `winget install openai.codex` or `npm i -g @openai/codex`
 - Python 3.10+
-- Python `requests` package
+- Python packages: `requests`, `python-dotenv`, and `truststore`
 - F5 AI Guardrails account
 - F5 AI Guardrails API token
 - At least one scanner package enabled in your F5 project
 
-Install the Python dependency:
+Install the Python dependencies:
 
 ```bash
-python -m pip install requests
+python -m pip install -r requirements.txt
 ```
 
 On macOS/Linux, your Python command may be `python3`:
 
 ```bash
-python3 -m pip install requests
+python3 -m pip install -r requirements.txt
 ```
 
 ---
@@ -207,6 +207,7 @@ All runtime configuration is via environment variables. Do not store API tokens 
 | `F5_GUARDRAILS_POST_STRICT` | `false` | `true` blocks on flagged output; `false` warns/audits only. |
 | `F5_GUARDRAILS_LOG_LEVEL` | `warn` | `debug`, `info`, `warn`, or `error`. |
 | `F5_GUARDRAILS_MAX_SCAN_LENGTH` | `50000` | Maximum characters to send to F5 for output scanning. |
+| `F5_GUARDRAILS_USE_SYSTEM_CERT_STORE` | `auto` | `auto` uses the Windows Cert Store through `truststore` when available. Set `true` to force or `false` to disable. |
 | `REQUESTS_CA_BUNDLE` | none | Path to a custom CA bundle for Python `requests`. Useful for corporate TLS inspection. |
 | `SSL_CERT_FILE` | none | Path to a custom CA bundle used by Python SSL. |
 | `CURL_CA_BUNDLE` | none | Path to a custom CA bundle used by curl-compatible tooling. |
@@ -274,11 +275,30 @@ SSLCertVerificationError: certificate verify failed: unable to get local issuer 
 That usually points to one of these causes:
 
 - Corporate TLS inspection is presenting a certificate signed by an internal CA.
-- Python `requests` does not trust the same root CAs as the browser or Windows certificate store.
+- Python `requests` does not trust the same root CAs as the browser or operating system certificate store.
 - The server is not presenting a complete intermediate certificate chain.
 - The client has an outdated or broken `certifi` CA bundle.
 
-If your environment uses an internal corporate root CA, export it as PEM and point Python at it:
+On Windows, the hooks and smoke test use `truststore` by default when it is installed. This lets Python trust the same Windows Cert Store roots that Chrome and Edge normally use.
+
+To confirm or force that behavior:
+
+```powershell
+$env:F5_GUARDRAILS_USE_SYSTEM_CERT_STORE = "true"
+python .\smoketest.py --tls-diagnostics
+```
+
+Persist it for Codex GUI:
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+  "F5_GUARDRAILS_USE_SYSTEM_CERT_STORE",
+  "true",
+  "User"
+)
+```
+
+If system-store trust is unavailable or your organization requires a dedicated CA bundle, export the internal corporate root CA as PEM and point Python at it:
 
 ```powershell
 $env:REQUESTS_CA_BUNDLE = "$env:USERPROFILE\.codex\certs\corp-root-ca.pem"
@@ -325,12 +345,12 @@ Install Python:
 winget install Python.Python.3
 ```
 
-Confirm Python and `requests`:
+Confirm Python dependencies:
 
 ```powershell
 python --version
-python -m pip install requests
-python -c "import requests; print(requests.__version__)"
+python -m pip install -r requirements.txt
+python -c "import requests, truststore; print(requests.__version__)"
 ```
 
 Set your API token for the current PowerShell session:
@@ -511,10 +531,10 @@ Deliver hook scripts using Intune, SCCM, Group Policy, or your normal endpoint m
 |---|---|---|
 | Hook does not fire | Hooks not enabled or not discovered | Confirm `codex_hooks = true`; use inline TOML hook definitions. |
 | Scan works in CLI but not desktop app | GUI app cannot see shell environment variables | Use `launchctl setenv` on macOS and relaunch the app. |
-| Python cannot import `requests` | `requests` not installed in the Python environment Codex is using | Run `python -m pip install requests`; confirm with `python -c "import requests"`. |
+| Python cannot import `requests` or `truststore` | Dependencies not installed in the Python environment Codex is using | Run `python -m pip install -r requirements.txt`; confirm with `python -c "import requests, truststore"`. |
 | Python cannot import `f5_guardrails_client` | Hook directory not in Python path or files not copied | Re-run installer; confirm files exist under `.codex/hooks/f5_guardrails`. |
-| Smoke test says `CERTIFICATE_VERIFY_FAILED` | Python does not trust the issuer chain | Run `smoketest.py --tls-diagnostics`; set `REQUESTS_CA_BUNDLE` or fix server chain. |
-| Smoke test passes in browser but fails in Python | Browser/OS trust store differs from Python/certifi | Add the corporate root CA to a PEM bundle and point Python to it. |
+| Smoke test says `CERTIFICATE_VERIFY_FAILED` | Python does not trust the issuer chain | Run `smoketest.py --tls-diagnostics`; on Windows use `F5_GUARDRAILS_USE_SYSTEM_CERT_STORE=true` or set `REQUESTS_CA_BUNDLE`. |
+| Smoke test passes in browser but fails in Python | Browser/OS trust store differs from Python/certifi | On Windows use the system cert store via `truststore`; otherwise add the corporate root CA to a PEM bundle. |
 | Scan times out | F5 API unreachable or slow | Check network/proxy; increase `F5_GUARDRAILS_TIMEOUT`. |
 | Hook blocks but user sees no message | Desktop app does not render hook `systemMessage` | Verify in F5 dashboard; use CLI for visible block details. |
 

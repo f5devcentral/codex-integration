@@ -36,6 +36,7 @@
 
     Optional environment variables:
         CODEX_HOME
+        F5_GUARDRAILS_USE_SYSTEM_CERT_STORE
         REQUESTS_CA_BUNDLE
         SSL_CERT_FILE
         CURL_CA_BUNDLE
@@ -75,6 +76,47 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Optional
+
+
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except AttributeError:
+    pass
+
+
+def env_switch(name: str, default: str = "") -> str:
+    return os.environ.get(name, default).strip().lower()
+
+
+def truthy(value: str) -> bool:
+    return value in ("1", "true", "yes", "on")
+
+
+def falsey(value: str) -> bool:
+    return value in ("0", "false", "no", "off", "none", "disabled")
+
+
+def system_cert_store_requested() -> bool:
+    value = env_switch("F5_GUARDRAILS_USE_SYSTEM_CERT_STORE", "auto")
+    if truthy(value):
+        return True
+    if falsey(value):
+        return False
+    return os.name == "nt"
+
+
+TRUSTSTORE_STATUS = "disabled"
+TRUSTSTORE_MODULE = None
+if system_cert_store_requested():
+    try:
+        import truststore
+
+        TRUSTSTORE_MODULE = truststore
+        TRUSTSTORE_STATUS = "enabled via truststore"
+    except ImportError:
+        TRUSTSTORE_STATUS = "unavailable: truststore is not installed"
+    except Exception as exc:
+        TRUSTSTORE_STATUS = f"unavailable: {type(exc).__name__}: {exc}"
 
 
 DEFAULT_API_HOST = "www.us1.calypsoai.app"
@@ -192,6 +234,8 @@ def print_python_tls_environment() -> None:
     print(f"  Python executable:       {sys.executable}")
     print(f"  Python version:          {sys.version}")
     print(f"  OpenSSL version:         {ssl.OPENSSL_VERSION}")
+    print(f"  System cert store:       {TRUSTSTORE_STATUS}")
+    print(f"  F5 use system store:     {os.environ.get('F5_GUARDRAILS_USE_SYSTEM_CERT_STORE', 'auto')}")
     print(f"  SSL_CERT_FILE:           {os.environ.get('SSL_CERT_FILE')}")
     print(f"  REQUESTS_CA_BUNDLE:      {os.environ.get('REQUESTS_CA_BUNDLE')}")
     print(f"  CURL_CA_BUNDLE:          {os.environ.get('CURL_CA_BUNDLE')}")
@@ -203,6 +247,13 @@ def print_python_tls_environment() -> None:
         print(f"  certifi CA bundle:       {certifi.where()}")
     except Exception as exc:
         print(f"  certifi CA bundle:       unavailable: {type(exc).__name__}: {exc}")
+
+
+def create_verified_tls_context() -> ssl.SSLContext:
+    if TRUSTSTORE_MODULE is not None:
+        return TRUSTSTORE_MODULE.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+    return ssl.create_default_context()
 
 
 def decode_der_certificate_for_display(cert_der: bytes) -> Optional[dict]:
@@ -269,7 +320,7 @@ def attempt_verified_tls_handshake(host: str, port: int) -> bool:
     print(f"  Target:                  {host}:{port}")
 
     try:
-        context = ssl.create_default_context()
+        context = create_verified_tls_context()
 
         with socket.create_connection((host, port), timeout=10) as sock:
             with context.wrap_socket(sock, server_hostname=host) as tls:

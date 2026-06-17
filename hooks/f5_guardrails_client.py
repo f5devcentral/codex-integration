@@ -21,6 +21,40 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+
+def _env_switch(name: str, default: str = "") -> str:
+    return os.getenv(name, default).strip().lower()
+
+
+def _truthy(value: str) -> bool:
+    return value in ("1", "true", "yes", "on")
+
+
+def _falsey(value: str) -> bool:
+    return value in ("0", "false", "no", "off", "none", "disabled")
+
+
+def _system_cert_store_requested() -> bool:
+    value = _env_switch("F5_GUARDRAILS_USE_SYSTEM_CERT_STORE", "auto")
+    if _truthy(value):
+        return True
+    if _falsey(value):
+        return False
+    return os.name == "nt"
+
+
+SYSTEM_CERT_STORE_STATUS = "disabled"
+if _system_cert_store_requested():
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+        SYSTEM_CERT_STORE_STATUS = "enabled via truststore"
+    except ImportError:
+        SYSTEM_CERT_STORE_STATUS = "unavailable: truststore is not installed"
+    except Exception as exc:
+        SYSTEM_CERT_STORE_STATUS = f"unavailable: {type(exc).__name__}: {exc}"
+
 try:
     import requests
 except ImportError:
@@ -40,13 +74,8 @@ F5_PROJECT_ID = os.getenv("F5_GUARDRAILS_PROJECT_ID", "")
 F5_TIMEOUT = int(os.getenv("F5_GUARDRAILS_TIMEOUT", "10"))
 F5_FAIL_MODE = os.getenv("F5_GUARDRAILS_FAIL_MODE", "open")  # "open" or "closed"
 F5_LOG_LEVEL = os.getenv("F5_GUARDRAILS_LOG_LEVEL", "warn")  # "debug", "info", "warn", "error"
-F5_DEBUG = os.getenv("F5_GUARDRAILS_DEBUG", "").lower() in ("1", "true", "yes", "on")
-F5_DEBUG_REQUESTS = os.getenv("F5_GUARDRAILS_DEBUG_REQUESTS", "").lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
+F5_DEBUG = _truthy(_env_switch("F5_GUARDRAILS_DEBUG"))
+F5_DEBUG_REQUESTS = _truthy(_env_switch("F5_GUARDRAILS_DEBUG_REQUESTS"))
 F5_DEBUG_BODY_CHARS = int(os.getenv("F5_GUARDRAILS_DEBUG_BODY_CHARS", "500"))
 F5_LOG_FILE = os.getenv("F5_GUARDRAILS_LOG_FILE", "").strip()
 
@@ -54,6 +83,11 @@ SCAN_ENDPOINT = f"{F5_BASE_URL.rstrip('/')}/backend/v1/scans"
 
 # Log levels as integers for comparison
 _LOG_LEVELS = {"debug": 0, "info": 1, "warn": 2, "error": 3}
+
+
+def _debug_enabled() -> bool:
+    """Return whether verbose hook diagnostics should be emitted."""
+    return F5_DEBUG or F5_DEBUG_REQUESTS or F5_LOG_LEVEL.lower() == "debug"
 
 
 def _codex_home() -> Path:
@@ -110,7 +144,7 @@ def _write_file_log(line: str) -> None:
 
 def _log(level: str, msg: str) -> None:
     """Log to stderr and mirror to a file; stdout is reserved for Codex hook protocol."""
-    threshold = 0 if (F5_DEBUG or F5_DEBUG_REQUESTS) else _LOG_LEVELS.get(F5_LOG_LEVEL, 2)
+    threshold = 0 if _debug_enabled() else _LOG_LEVELS.get(F5_LOG_LEVEL, 2)
     if _LOG_LEVELS.get(level, 2) >= threshold:
         console_line = f"[f5-guardrails] [{level.upper()}] {msg}"
         print(console_line, file=sys.stderr)
@@ -131,7 +165,7 @@ def log_hook_entry(hook_name: str) -> None:
     timestamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
     _write_file_log(f"{timestamp} pid={os.getpid()} {console_line}")
 
-    if F5_DEBUG or F5_DEBUG_REQUESTS:
+    if _debug_enabled():
         print(console_line, file=sys.stderr)
 
 
@@ -158,10 +192,12 @@ def _mask_value(name: str, value: str) -> str:
 
 def _debug_env_snapshot() -> None:
     """Emit selected config and TLS/proxy env vars for troubleshooting."""
-    if not (F5_DEBUG or F5_DEBUG_REQUESTS):
+    if not _debug_enabled():
         return
 
     names = [
+        "CODEX_HOME",
+        "USERPROFILE",
         "F5_GUARDRAILS_BASE_URL",
         "F5_GUARDRAILS_API_TOKEN",
         "F5_GUARDRAILS_PROJECT_ID",
@@ -172,6 +208,7 @@ def _debug_env_snapshot() -> None:
         "F5_GUARDRAILS_DEBUG",
         "F5_GUARDRAILS_DEBUG_REQUESTS",
         "F5_GUARDRAILS_DEBUG_BODY_CHARS",
+        "F5_GUARDRAILS_USE_SYSTEM_CERT_STORE",
         "F5_GUARDRAILS_CA_BUNDLE",
         "REQUESTS_CA_BUNDLE",
         "SSL_CERT_FILE",
@@ -190,6 +227,18 @@ def _debug_env_snapshot() -> None:
         value = os.getenv(name, "")
         _log("debug", f"env {name}={_mask_value(name, value)}")
     _log("debug", "Environment snapshot end")
+
+    _log("debug", "Effective configuration begin")
+    _log("debug", f"effective CODEX_HOME={_codex_home()}")
+    _log("debug", f"effective F5_GUARDRAILS_BASE_URL={F5_BASE_URL}")
+    _log("debug", f"effective scan_endpoint={SCAN_ENDPOINT}")
+    _log("debug", f"effective F5_GUARDRAILS_PROJECT_ID set={bool(F5_PROJECT_ID)}")
+    _log("debug", f"effective F5_GUARDRAILS_TIMEOUT={F5_TIMEOUT}")
+    _log("debug", f"effective F5_GUARDRAILS_FAIL_MODE={F5_FAIL_MODE}")
+    _log("debug", f"effective F5_GUARDRAILS_LOG_LEVEL={F5_LOG_LEVEL}")
+    _log("debug", f"effective F5_GUARDRAILS_LOG_FILE={_default_log_file()}")
+    _log("debug", f"effective system_cert_store={SYSTEM_CERT_STORE_STATUS}")
+    _log("debug", "Effective configuration end")
 
 
 def _response_preview(resp: requests.Response) -> str:
@@ -251,6 +300,10 @@ def _requests_tls_kwargs() -> dict[str, Any]:
     if ca_bundle:
         kwargs["verify"] = ca_bundle
         _log("debug", f"Using CA bundle: {ca_bundle}")
+    elif SYSTEM_CERT_STORE_STATUS.startswith("enabled"):
+        _log("debug", f"Using system certificate store: {SYSTEM_CERT_STORE_STATUS}")
+    elif _system_cert_store_requested():
+        _log("debug", f"System certificate store requested but {SYSTEM_CERT_STORE_STATUS}")
 
     client_cert = _env_file("F5_GUARDRAILS_CLIENT_CERT")
     client_key = _env_file("F5_GUARDRAILS_CLIENT_KEY")
@@ -312,18 +365,18 @@ def scan(text: str, context: str = "", metadata: Optional[dict] = None) -> ScanR
     _debug_env_snapshot()
 
     if not F5_API_TOKEN:
-        _log("error", "F5_GUARDRAILS_API_TOKEN is not set — cannot scan.")
+        _log("error", "F5_GUARDRAILS_API_TOKEN is not set - cannot scan.")
         if F5_FAIL_MODE == "closed":
             return ScanResult(
                 outcome="error",
                 message="F5 Guardrails API token not configured. Fail-closed: blocking.",
             )
         _log("warn", "Fail-open: allowing without scan.")
-        return ScanResult(outcome="cleared", message="No API token — fail-open bypass.")
+        return ScanResult(outcome="cleared", message="No API token - fail-open bypass.")
 
     if not text or not text.strip():
-        _log("debug", f"Empty content for [{context}] — skipping scan.")
-        return ScanResult(outcome="cleared", message="Empty content — nothing to scan.")
+        _log("debug", f"Empty content for [{context}] - skipping scan.")
+        return ScanResult(outcome="cleared", message="Empty content - nothing to scan.")
 
     headers = {
         "Authorization": f"Bearer {F5_API_TOKEN}",
@@ -339,7 +392,7 @@ def scan(text: str, context: str = "", metadata: Optional[dict] = None) -> ScanR
 
     tls_kwargs = _requests_tls_kwargs()
 
-    _log("debug", f"Scanning [{context}]: {len(text)} chars → {SCAN_ENDPOINT}")
+    _log("debug", f"Scanning [{context}]: {len(text)} chars -> {SCAN_ENDPOINT}")
     if F5_DEBUG_REQUESTS:
         verify_value = tls_kwargs.get("verify", "<requests default>")
         cert_value = tls_kwargs.get("cert", "<none>")
@@ -457,7 +510,7 @@ def scan(text: str, context: str = "", metadata: Optional[dict] = None) -> ScanR
 
     _log(
         "info",
-        f"Scan [{context}] → {outcome} ({len(scanner_results)} scanners, {duration:.0f}ms)",
+        f"Scan [{context}] -> {outcome} ({len(scanner_results)} scanners, {duration:.0f}ms)",
     )
 
     return ScanResult(

@@ -9,6 +9,7 @@
     Installs Windows managed hook configuration to C:\ProgramData\OpenAI\Codex\requirements.toml
     Disables user-level hooks.json by default to prevent duplicate hook execution
     Calls smoketest.py after install, instead of embedding the smoke test inline
+    Defaults PreToolUse/PostToolUse matcher to ".*" for Codex Windows GUI/app tool names
 
 .NOTES
     Run from an elevated / Administrator PowerShell prompt so the installer can write:
@@ -23,12 +24,17 @@
 
 .PARAMETER PreserveExistingLogFile
     Do not reset F5_GUARDRAILS_LOG_FILE to %USERPROFILE%\.codex\logs\f5_guardrails.log.
+
+.PARAMETER ToolMatcher
+    Matcher for PreToolUse and PostToolUse managed hooks.
+    Defaults to .* because Codex Windows GUI/app tool names are broader than Bash/apply_patch.
 #>
 
 param(
     [switch]$InstallUserHooksJson,
     [switch]$SkipSmokeTest,
-    [switch]$PreserveExistingLogFile
+    [switch]$PreserveExistingLogFile,
+    [string]$ToolMatcher = ".*"
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,6 +55,18 @@ $DefaultLogFile = Join-Path $CodexHome "logs\f5_guardrails.log"
 function Write-Info { param([string]$Msg) Write-Host "[OK] $Msg" -ForegroundColor Green }
 function Write-Warn { param([string]$Msg) Write-Host "[!]  $Msg" -ForegroundColor Yellow }
 function Write-Err  { param([string]$Msg) Write-Host "[X]  $Msg" -ForegroundColor Red }
+
+function Write-CapturedOutput {
+    param($Output)
+
+    if (-not $Output) {
+        return
+    }
+
+    foreach ($line in $Output) {
+        Write-Host ([string]$line)
+    }
+}
 
 function Test-IsAdmin {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -197,18 +215,18 @@ $PythonVersion = & $PythonExe --version 2>&1
 Write-Info "Python found: $PythonVersion"
 Write-Info "Python executable: $PythonExe"
 
-# Check requests module
-$RequestsCheck = & $PythonExe -c "import requests" 2>&1
+# Check Python dependencies
+$RequestsCheck = & $PythonExe -c "import requests, truststore" 2>&1
 if ($LASTEXITCODE -ne 0) {
-    Write-Warn "Python 'requests' module not found. Installing dependencies..."
-    & $PythonExe -m pip install -q requests python-dotenv
+    Write-Warn "Python dependencies not found. Installing requests, python-dotenv, and truststore..."
+    & $PythonExe -m pip install -q requests python-dotenv truststore
     if ($LASTEXITCODE -ne 0) {
         Write-Err "Failed to install Python dependencies."
         exit 1
     }
     Write-Info "Python dependencies installed."
 } else {
-    Write-Info "Python 'requests' module available."
+    Write-Info "Python dependencies available."
 }
 
 if (-not $env:F5_GUARDRAILS_API_TOKEN) {
@@ -351,6 +369,7 @@ $PostToolScript = Escape-TomlSingleQuoted (Join-Path $HooksDir "post_tool_use.py
 # - Do not set allow_managed_hooks_only here. In testing, the stable Windows GUI path
 #   was managed hooks in requirements.toml plus no user hooks.json.
 # - Use command_windows and windows_managed_dir for native Windows Codex GUI.
+# - Use a broad matcher by default because GUI/app tool names are broader than Bash/apply_patch.
 $ManagedToml = @"
 # Codex managed requirements for F5 AI Guardrails hooks.
 # Installed by install.ps1.
@@ -359,6 +378,7 @@ $ManagedToml = @"
 #   - managed hooks live in this requirements.toml
 #   - user-level hooks.json is disabled by default to avoid duplicate scans
 #   - do not add allow_managed_hooks_only unless separately tested in your environment
+#   - PreToolUse/PostToolUse default to matcher = ".*" for the Windows GUI/app path
 
 [features]
 hooks = true
@@ -377,7 +397,7 @@ timeout = 15
 statusMessage = "F5 Guardrails: managed prompt scan"
 
 [[hooks.PreToolUse]]
-matcher = "^(Bash|apply_patch)$"
+matcher = "$ToolMatcher"
 
 [[hooks.PreToolUse.hooks]]
 type = "command"
@@ -387,7 +407,7 @@ timeout = 15
 statusMessage = "F5 Guardrails: managed tool-input scan"
 
 [[hooks.PostToolUse]]
-matcher = "^(Bash|apply_patch)$"
+matcher = "$ToolMatcher"
 
 [[hooks.PostToolUse.hooks]]
 type = "command"
@@ -427,14 +447,10 @@ if ($SkipSmokeTest) {
 
             if ($smokeExit -eq 0) {
                 Write-Info "smoketest.py completed successfully."
-                if ($smokeOutput) {
-                    Write-Host $smokeOutput
-                }
+                Write-CapturedOutput $smokeOutput
             } else {
                 Write-Warn "smoketest.py exited with code $smokeExit."
-                if ($smokeOutput) {
-                    Write-Host $smokeOutput
-                }
+                Write-CapturedOutput $smokeOutput
             }
         } catch {
             try { Pop-Location } catch {}
@@ -468,9 +484,13 @@ Write-Host "    F5_GUARDRAILS_FAIL_MODE        default: open; set to 'closed' fo
 Write-Host "    F5_GUARDRAILS_POST_STRICT      default: false; set to 'true' to block on flagged output"
 Write-Host "    F5_GUARDRAILS_LOG_LEVEL        debug|info|warn|error"
 Write-Host "    F5_GUARDRAILS_MAX_SCAN_LENGTH  default: 50000 chars"
+Write-Host "    F5_GUARDRAILS_USE_SYSTEM_CERT_STORE  auto|true|false; default auto uses Windows Cert Store"
 Write-Host "    F5_GUARDRAILS_CA_BUNDLE        CA bundle for TLS inspection"
 Write-Host "    REQUESTS_CA_BUNDLE             requests-compatible CA bundle"
 Write-Host "    SSL_CERT_FILE                  OpenSSL/requests CA bundle"
+Write-Host ""
+Write-Host "  Managed PreToolUse/PostToolUse matcher:"
+Write-Host "    $ToolMatcher"
 Write-Host ""
 Write-Host "  Restart Codex GUI / CLI for hooks to take effect."
 Write-Host ("=" * 72)
