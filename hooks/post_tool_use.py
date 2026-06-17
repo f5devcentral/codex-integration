@@ -24,7 +24,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from f5_guardrails_client import read_hook_input, scan, emit_warn, emit_json, _log, log_hook_entry
+from f5_guardrails_client import (
+    read_hook_input,
+    scan,
+    emit_warn,
+    emit_post_tool_block,
+    _log,
+    log_hook_entry,
+)
 
 # Strict mode blocks on flagged output; default is audit-only (warn).
 STRICT_MODE = os.getenv("F5_GUARDRAILS_POST_STRICT", "false").lower() in ("true", "1", "yes")
@@ -111,17 +118,16 @@ def main() -> None:
         _log("warn", f"Tool output flagged by F5 Guardrails: {tool_name} → {result.outcome}")
 
         warning_msg = (
-            f"🛡️ F5 Guardrails flagged output from {tool_name}.\n"
+            f"F5 Guardrails flagged output from {tool_name}.\n"
             f"Outcome: {result.outcome} | Scanners triggered: {scanner_count}"
         )
 
         if STRICT_MODE:
             _log("warn", "Strict mode: stopping turn due to flagged output.")
-            emit_json({
-                "continue": False,
-                "stopReason": f"F5 Guardrails flagged {tool_name} output ({result.outcome})",
-                "systemMessage": warning_msg,
-            })
+            emit_post_tool_block(
+                reason=f"F5 Guardrails flagged {tool_name} output ({result.outcome})",
+                feedback=warning_msg,
+            )
         else:
             # Audit mode: warn but don't block.
             emit_warn(warning_msg)

@@ -541,19 +541,44 @@ def emit_json(data: dict) -> None:
     print(json.dumps(data, separators=(",", ":")))
 
 
-def emit_block(reason: str, feedback: str = "") -> None:
-    """Emit a block decision (PreToolUse / PermissionRequest)."""
+def emit_prompt_block(reason: str, message: str = "") -> None:
+    """Emit the documented UserPromptSubmit block decision."""
     output: dict = {"decision": "block", "reason": reason}
+    if message:
+        output["systemMessage"] = message
+    emit_json(output)
+
+
+def emit_block(reason: str, feedback: str = "") -> None:
+    """Emit a PreToolUse deny decision with legacy block fields for compatibility."""
+    output: dict = {
+        "decision": "block",
+        "reason": reason,
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        },
+    }
     if feedback:
         output["systemMessage"] = feedback
     emit_json(output)
 
 
-def emit_stop(reason: str, message: str = "") -> None:
-    """Emit a stop decision (UserPromptSubmit / Stop)."""
-    output: dict = {"continue": False, "stopReason": reason}
-    if message:
-        output["systemMessage"] = message
+def emit_post_tool_block(reason: str, feedback: str = "") -> None:
+    """Emit a PostToolUse block/feedback decision."""
+    output: dict = {
+        "decision": "block",
+        "reason": reason,
+        "continue": False,
+        "stopReason": reason,
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": feedback or reason,
+        },
+    }
+    if feedback:
+        output["systemMessage"] = feedback
     emit_json(output)
 
 

@@ -20,7 +20,7 @@ import sys
 # Ensure the hooks directory is on the path so we can import the client.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from f5_guardrails_client import read_hook_input, scan, emit_stop, _log, log_hook_entry
+from f5_guardrails_client import read_hook_input, scan, emit_prompt_block, _log, log_hook_entry
 
 
 def main() -> None:
@@ -46,21 +46,23 @@ def main() -> None:
     if result.is_error and result.outcome == "error":
         # Error path — already handled by fail-open/closed in the client.
         if result.is_blocked:
-            emit_stop(
+            emit_prompt_block(
                 reason=f"F5 Guardrails error: {result.message}",
-                message=f"⚠️ {result.message}",
+                message=f"F5 Guardrails could not complete the prompt scan: {result.message}",
             )
         # If fail-open cleared it, we just return (allow).
         return
 
     if result.is_blocked:
         _log("warn", f"Prompt blocked by F5 Guardrails: {result.outcome}")
-        emit_stop(
+        triggered = [s for s in result.scanner_results if s.get("outcome") != "passed"]
+        emit_prompt_block(
             reason=f"F5 Guardrails blocked this prompt ({result.outcome})",
             message=(
-                f"🛡️ F5 Guardrails blocked your prompt.\n"
+                f"F5 Guardrails blocked your prompt.\n"
                 f"Outcome: {result.outcome}\n"
-                f"Scanners triggered: {len([s for s in result.scanner_results if s.get('outcome') != 'passed'])}"
+                f"Scanners triggered: {len(triggered)}\n"
+                f"Try rephrasing the request or removing sensitive/disallowed content."
             ),
         )
         return

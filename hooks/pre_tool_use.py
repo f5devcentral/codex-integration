@@ -96,7 +96,7 @@ def main() -> None:
         if result.is_blocked:
             emit_block(
                 reason=f"F5 Guardrails error: {result.message}",
-                feedback=f"⚠️ {result.message}",
+                feedback=f"F5 Guardrails could not complete the tool-input scan: {result.message}",
             )
         return
 
@@ -115,7 +115,7 @@ def main() -> None:
         emit_block(
             reason=f"F5 Guardrails blocked this {tool_name} call ({result.outcome})",
             feedback=(
-                f"🛡️ F5 Guardrails blocked this {tool_name} execution.\n"
+                f"F5 Guardrails blocked this {tool_name} execution.\n"
                 f"Outcome: {result.outcome}{scanner_info}\n"
                 f"Try rephrasing or using a different approach."
             ),
