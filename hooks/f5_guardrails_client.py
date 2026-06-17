@@ -56,6 +56,22 @@ SCAN_ENDPOINT = f"{F5_BASE_URL.rstrip('/')}/backend/v1/scans"
 _LOG_LEVELS = {"debug": 0, "info": 1, "warn": 2, "error": 3}
 
 
+def _codex_home() -> Path:
+    """
+    Resolve CODEX_HOME the same way as smoketest.py:
+      CODEX_HOME, then USERPROFILE\\.codex, then the current user's home.
+    """
+    codex_home = os.getenv("CODEX_HOME")
+    if codex_home:
+        return Path(codex_home).expanduser()
+
+    user_profile = os.getenv("USERPROFILE")
+    if user_profile:
+        return (Path(user_profile) / ".codex").expanduser()
+
+    return Path.home() / ".codex"
+
+
 def _default_log_file() -> Path | None:
     """
     Return the file used for mirrored hook logs.
@@ -74,8 +90,7 @@ def _default_log_file() -> Path | None:
     if F5_LOG_FILE:
         return Path(F5_LOG_FILE).expanduser()
 
-    codex_home = os.getenv("CODEX_HOME") or str(Path.home() / ".codex")
-    return Path(codex_home).expanduser() / "logs" / "f5_guardrails.log"
+    return _codex_home() / "logs" / "f5_guardrails.log"
 
 
 def _write_file_log(line: str) -> None:
@@ -103,6 +118,21 @@ def _log(level: str, msg: str) -> None:
         timestamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         file_line = f"{timestamp} pid={os.getpid()} {console_line}"
         _write_file_log(file_line)
+
+
+def log_hook_entry(hook_name: str) -> None:
+    """Record hook startup details using the shared hook log path."""
+    console_line = (
+        f"[f5-guardrails] [HOOK-ENTRY] {hook_name} started "
+        f"argv0={sys.argv[0]} cwd={os.getcwd()} "
+        f"codex_home={_codex_home()} log_file={_default_log_file()}"
+    )
+
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    _write_file_log(f"{timestamp} pid={os.getpid()} {console_line}")
+
+    if F5_DEBUG or F5_DEBUG_REQUESTS:
+        print(console_line, file=sys.stderr)
 
 
 def _mask_value(name: str, value: str) -> str:
@@ -146,6 +176,7 @@ def _debug_env_snapshot() -> None:
         "REQUESTS_CA_BUNDLE",
         "SSL_CERT_FILE",
         "CURL_CA_BUNDLE",
+        "SSLKEYLOGFILE",
         "SSL_CERT_DIR",
         "F5_GUARDRAILS_CLIENT_CERT",
         "F5_GUARDRAILS_CLIENT_KEY",
@@ -200,6 +231,7 @@ def _requests_tls_kwargs() -> dict[str, Any]:
       F5_GUARDRAILS_CA_BUNDLE
       REQUESTS_CA_BUNDLE
       SSL_CERT_FILE
+      CURL_CA_BUNDLE
 
     Optional mTLS client certificate:
       F5_GUARDRAILS_CLIENT_CERT
@@ -214,6 +246,7 @@ def _requests_tls_kwargs() -> dict[str, Any]:
         _env_file("F5_GUARDRAILS_CA_BUNDLE")
         or _env_file("REQUESTS_CA_BUNDLE")
         or _env_file("SSL_CERT_FILE")
+        or _env_file("CURL_CA_BUNDLE")
     )
     if ca_bundle:
         kwargs["verify"] = ca_bundle

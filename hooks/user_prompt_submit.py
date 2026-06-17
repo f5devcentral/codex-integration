@@ -20,10 +20,12 @@ import sys
 # Ensure the hooks directory is on the path so we can import the client.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from f5_guardrails_client import read_hook_input, scan, emit_stop, _log
+from f5_guardrails_client import read_hook_input, scan, emit_stop, _log, log_hook_entry
 
 
 def main() -> None:
+    log_hook_entry("user_prompt_submit.py")
+
     hook_input = read_hook_input()
 
     # Extract the user's prompt text.

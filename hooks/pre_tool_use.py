@@ -20,7 +20,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from f5_guardrails_client import read_hook_input, scan, emit_block, _log
+from f5_guardrails_client import read_hook_input, scan, emit_block, _log, log_hook_entry
 
 
 def _extract_scannable_text(hook_input: dict) -> tuple[str, str]:
@@ -67,6 +67,8 @@ def _extract_scannable_text(hook_input: dict) -> tuple[str, str]:
 
 
 def main() -> None:
+    log_hook_entry("pre_tool_use.py")
+
     hook_input = read_hook_input()
 
     tool_name = hook_input.get("tool_name", "unknown")

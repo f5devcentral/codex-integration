@@ -24,7 +24,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from f5_guardrails_client import read_hook_input, scan, emit_warn, emit_json, _log
+from f5_guardrails_client import read_hook_input, scan, emit_warn, emit_json, _log, log_hook_entry
 
 # Strict mode blocks on flagged output; default is audit-only (warn).
 STRICT_MODE = os.getenv("F5_GUARDRAILS_POST_STRICT", "false").lower() in ("true", "1", "yes")
@@ -67,6 +67,8 @@ def _extract_output_text(hook_input: dict) -> tuple[str, str]:
 
 
 def main() -> None:
+    log_hook_entry("post_tool_use.py")
+
     hook_input = read_hook_input()
 
     tool_name = hook_input.get("tool_name", "unknown")
