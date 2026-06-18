@@ -1,6 +1,6 @@
 # Codex ↔ F5 AI Guardrails Integration
 
-Runtime security controls for OpenAI Codex. This integration scans user prompts, tool inputs, and tool outputs through F5 AI Guardrails, powered by CalypsoAI, to help catch prompt injection, PII leakage, toxic content, and off-topic material before they cause damage.
+Runtime security controls for OpenAI Codex. This integration scans user prompts, tool inputs, tool outputs, and final assistant responses through F5 AI Guardrails, powered by CalypsoAI, to help catch prompt injection, PII leakage, toxic content, and off-topic material before they cause damage.
 
 > **Windows users:** native Windows support is included. The Windows installer uses PowerShell, but the smoke test is now a standalone Python script: `smoketest.py`.
 
@@ -32,7 +32,15 @@ Tool output
 [PostToolUse hook]
   ↓
 F5 Scan API → warn / block
+  ↓
+Assistant response
+  ↓
+[Stop hook]
+  ↓
+F5 Scan API → suppress / allow
 ```
+
+`Stop` hook response scanning is best-effort local/client-side enforcement over Codex's `last_assistant_message`. It is not an upstream model proxy and does not replace server-side policy controls.
 
 The hooks share a common Python client module, `f5_guardrails_client.py`, with timeout handling, fail-open / fail-closed behavior, and structured error handling.
 
@@ -149,6 +157,7 @@ The installer:
 - Copies hook scripts to your Codex hooks directory.
 - Installs or updates hook registration.
 - Enables `codex_hooks = true` in Codex config.
+- Adds `Stop` response scanning for `last_assistant_message`.
 - Runs a smoke test scan against F5 AI Guardrails.
 
 ### 4. Restart Codex
@@ -181,7 +190,8 @@ codex-integration/
     ├── f5_guardrails_client.py
     ├── user_prompt_submit.py
     ├── pre_tool_use.py
-    └── post_tool_use.py
+    ├── post_tool_use.py
+    └── stop.py
 ```
 
 ---
@@ -414,7 +424,16 @@ type = "command"
 command_windows = "python %USERPROFILE%\\.codex\\hooks\\f5_guardrails\\post_tool_use.py"
 timeout = 15
 statusMessage = "F5 Guardrails: scanning output"
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command_windows = "python %USERPROFILE%\\.codex\\hooks\\f5_guardrails\\stop.py"
+timeout = 15
+statusMessage = "F5 Guardrails: scanning assistant response"
 ```
+
+The Windows installer uses managed `requirements.toml` as the GUI source of truth. Its generated `command_windows` values intentionally avoid embedded double quotes; when a Python or hook path contains spaces, the installer resolves an 8.3 short path.
 
 ---
 
@@ -436,7 +455,8 @@ your-repo/
             ├── f5_guardrails_client.py
             ├── user_prompt_submit.py
             ├── pre_tool_use.py
-            └── post_tool_use.py
+            ├── post_tool_use.py
+            └── stop.py
 ```
 
 Developers get scanning when they open the project.
@@ -474,6 +494,13 @@ type = "command"
 command = "python3 /opt/enterprise/codex-hooks/f5_guardrails/post_tool_use.py"
 timeout = 15
 statusMessage = "F5 Guardrails: scanning output"
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "python3 /opt/enterprise/codex-hooks/f5_guardrails/stop.py"
+timeout = 15
+statusMessage = "F5 Guardrails: scanning assistant response"
 ```
 
 Users cannot override admin-enforced hooks. Deliver scripts to `managed_dir` separately via MDM, internal package manager, or git submodule.
@@ -499,7 +526,7 @@ cloud-managed > MDM > system-level > user-level
 
 ### Windows enterprise enforcement
 
-Use `command_windows` for hook commands:
+Use `command_windows` for hook commands. Avoid embedded double quotes in `command_windows`; prefer paths with no spaces or 8.3 short paths.
 
 ```toml
 [[hooks.UserPromptSubmit.hooks]]
@@ -507,6 +534,29 @@ type = "command"
 command_windows = "python C:\\enterprise\\codex-hooks\\f5_guardrails\\user_prompt_submit.py"
 timeout = 15
 statusMessage = "F5 Guardrails: scanning prompt"
+
+[[hooks.PreToolUse]]
+matcher = ".*"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command_windows = "python C:\\enterprise\\codex-hooks\\f5_guardrails\\pre_tool_use.py"
+timeout = 15
+statusMessage = "F5 Guardrails: scanning tool input"
+
+[[hooks.PostToolUse]]
+matcher = ".*"
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command_windows = "python C:\\enterprise\\codex-hooks\\f5_guardrails\\post_tool_use.py"
+timeout = 15
+statusMessage = "F5 Guardrails: scanning output"
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command_windows = "python C:\\enterprise\\codex-hooks\\f5_guardrails\\stop.py"
+timeout = 15
+statusMessage = "F5 Guardrails: scanning assistant response"
 ```
 
 Deliver hook scripts using Intune, SCCM, Group Policy, or your normal endpoint management tooling.

@@ -6,15 +6,18 @@ Get from nothing to runtime-secured Codex on Windows in under 10 minutes.
 
 ## What You're Setting Up
 
-Every prompt you type, every shell command Codex generates, and every tool output it produces gets scanned through F5 AI Guardrails before it can do damage. The integration uses Codex's hook system to intercept three lifecycle events:
+Every prompt you type, every shell command Codex generates, every tool output it produces, and the final assistant response get scanned through F5 AI Guardrails before they can create risk. The integration uses Codex's hook system to intercept four lifecycle events:
 
 | Hook | What it scans | What happens on block |
 |---|---|---|
 | **UserPromptSubmit** | Your prompt before it reaches the model | Prompt stopped, reason displayed |
 | **PreToolUse** | Tool inputs (patches) before execution | Tool call blocked, agent gets feedback to try a different approach |
 | **PostToolUse** | Tool output (stdout/stderr, patch results) | Warning surfaced (audit mode) or turn stopped (strict mode) |
+| **Stop** | Final assistant response from `last_assistant_message` | Response suppressed before display when blocked |
 
-> **⚠️ Windows limitation:** `PreToolUse` hooks do not currently fire for shell commands on native Windows. Codex dispatches them as `command_execution` events rather than `Bash` tool calls. Prompt scanning and output scanning work normally. This is tracked upstream at [openai/codex#24453](https://github.com/openai/codex/issues/24453).
+`Stop` scanning is best-effort local/client-side response scanning. It is not upstream model proxy enforcement.
+
+> **⚠️ Windows limitation:** `PreToolUse` hooks do not currently fire for shell commands on native Windows. Codex dispatches them as `command_execution` events rather than `Bash` tool calls. Prompt scanning, output scanning, and Stop response scanning work normally. This is tracked upstream at [openai/codex#24453](https://github.com/openai/codex/issues/24453).
 
 ---
 
@@ -121,9 +124,18 @@ type = "command"
 command_windows = "python %USERPROFILE%\\.codex\\hooks\\f5_guardrails\\post_tool_use.py"
 timeout = 15
 statusMessage = "F5 Guardrails: scanning output"
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command_windows = "python %USERPROFILE%\\.codex\\hooks\\f5_guardrails\\stop.py"
+timeout = 15
+statusMessage = "F5 Guardrails: scanning assistant response"
 ```
 
 Use `command_windows` instead of `command` — this is Codex's Windows-specific hook command field.
+Avoid embedded double quotes inside `command_windows`; use paths without spaces or 8.3 short paths.
 
 ---
 
@@ -220,6 +232,14 @@ type = "command"
 command_windows = "python C:\\enterprise\\codex-hooks\\f5_guardrails\\post_tool_use.py"
 timeout = 15
 statusMessage = "F5 Guardrails: scanning output"
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command_windows = "python C:\\enterprise\\codex-hooks\\f5_guardrails\\stop.py"
+timeout = 15
+statusMessage = "F5 Guardrails: scanning assistant response"
 ```
 
 ### Script delivery
@@ -238,7 +258,7 @@ Precedence: cloud-managed > system-level (`%ProgramData%`)
 | `python` not found | Python not in PATH | Run `winget install Python.Python.3`, then reopen PowerShell |
 | Scan works in CLI but not desktop app | Desktop app can't see env vars | Add token via System Properties > Environment Variables, then fully quit and relaunch |
 | Desktop app blocks but shows no message | App doesn't render hook `systemMessage` | Known limitation — security is enforced, UX feedback is not |
-| PreToolUse hook doesn't fire | Upstream Codex bug on Windows | [#24453](https://github.com/openai/codex/issues/24453) — prompt and output scanning still work |
+| PreToolUse hook doesn't fire | Upstream Codex bug on Windows | [#24453](https://github.com/openai/codex/issues/24453) — prompt, output, and Stop response scanning still work |
 | Certificate verification fails | Python cannot build a trusted chain | Run `python .\smoketest.py --tls-diagnostics`; keep `F5_GUARDRAILS_USE_SYSTEM_CERT_STORE=auto` or set it to `true` |
 | Scan times out | F5 API slow or unreachable | Increase `F5_GUARDRAILS_TIMEOUT` or check network |
 | Installer fails on `pip install` | pip not in PATH | Run `python -m ensurepip --upgrade` first |

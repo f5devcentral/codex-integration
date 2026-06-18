@@ -37,6 +37,18 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python %USERPROFILE%\\.codex\\hooks\\f5_guardrails\\stop.py",
+            "timeout": 15,
+            "statusMessage": "F5 Guardrails: scanning assistant response"
+          }
+        ]
+      }
     ]
   }
 }

@@ -2,19 +2,20 @@
 
 Get from a fresh Codex install to runtime-scanned prompts in under 10 minutes.
 
-This guide covers the local Codex integration for F5 AI Guardrails. It installs Codex hooks that scan prompts, tool inputs, and tool outputs before they can create risk.
+This guide covers the local Codex integration for F5 AI Guardrails. It installs Codex hooks that scan prompts, tool inputs, tool outputs, and final assistant responses before they can create risk.
 
 ---
 
 ## What You Are Setting Up
 
-The integration uses Codex hooks to intercept three lifecycle events:
+The integration uses Codex hooks to intercept four lifecycle events:
 
 | Hook | What it scans | What happens on block |
 |---|---|---|
 | `UserPromptSubmit` | The user prompt before it reaches the model | The prompt is stopped before the model sees it. |
 | `PreToolUse` | Tool input, such as shell commands and patches | The tool call is blocked and the agent receives feedback. |
 | `PostToolUse` | Tool output, such as stdout/stderr and patch results | A warning is surfaced or the turn is stopped, depending on strict mode. |
+| `Stop` | The final assistant response from `last_assistant_message` | The response is suppressed before display when blocked. |
 
 High-level flow:
 
@@ -22,7 +23,10 @@ High-level flow:
 Prompt → UserPromptSubmit hook → F5 Scan API → allow/block
 Tool input → PreToolUse hook → F5 Scan API → allow/block
 Tool output → PostToolUse hook → F5 Scan API → warn/block
+Assistant response → Stop hook → F5 Scan API → suppress/allow
 ```
+
+`Stop` scanning is best-effort local/client-side response scanning. It is not upstream model proxy enforcement.
 
 ---
 
@@ -319,6 +323,13 @@ type = "command"
 command = "/usr/bin/python3 /Users/YOUR_USERNAME/.codex/hooks/f5_guardrails/post_tool_use.py"
 timeout = 15
 statusMessage = "F5 Guardrails: scanning output"
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "/usr/bin/python3 /Users/YOUR_USERNAME/.codex/hooks/f5_guardrails/stop.py"
+timeout = 15
+statusMessage = "F5 Guardrails: scanning assistant response"
 ```
 
 Replace `YOUR_USERNAME` with your actual username. Use absolute paths; do not use `~`.
@@ -359,7 +370,16 @@ type = "command"
 command_windows = "python %USERPROFILE%\\.codex\\hooks\\f5_guardrails\\post_tool_use.py"
 timeout = 15
 statusMessage = "F5 Guardrails: scanning output"
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command_windows = "python %USERPROFILE%\\.codex\\hooks\\f5_guardrails\\stop.py"
+timeout = 15
+statusMessage = "F5 Guardrails: scanning assistant response"
 ```
+
+On Windows, avoid embedded double quotes inside `command_windows`. The installer-generated managed config resolves 8.3 short paths when needed so command strings can remain unquoted.
 
 ---
 

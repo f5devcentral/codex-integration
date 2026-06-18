@@ -104,6 +104,51 @@ function Find-PythonExe {
     return $null
 }
 
+function Get-ShortPath {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        throw "Cannot resolve short path because path does not exist: $Path"
+    }
+
+    $fso = New-Object -ComObject Scripting.FileSystemObject
+    $item = Get-Item -LiteralPath $Path
+
+    if ($item.PSIsContainer) {
+        return $fso.GetFolder($item.FullName).ShortPath
+    }
+
+    return $fso.GetFile($item.FullName).ShortPath
+}
+
+function Get-CommandSafePath {
+    param([string]$Path)
+
+    $resolved = (Resolve-Path -LiteralPath $Path).Path
+    if ($resolved -notmatch "\s") {
+        return $resolved
+    }
+
+    $shortPath = Get-ShortPath -Path $resolved
+    if ($shortPath -and $shortPath -notmatch "\s") {
+        return $shortPath
+    }
+
+    throw "Path contains spaces and no usable 8.3 short path was found: $resolved"
+}
+
+function New-HookCommandWindows {
+    param(
+        [string]$PythonExe,
+        [string]$ScriptPath
+    )
+
+    $safePythonExe = Get-CommandSafePath -Path $PythonExe
+    $safeScriptPath = Get-CommandSafePath -Path $ScriptPath
+
+    return Escape-TomlSingleQuoted ("$safePythonExe $safeScriptPath")
+}
+
 function Set-TomlKey {
     param(
         [string]$Path,
@@ -270,7 +315,8 @@ $HookFiles = @(
     "f5_guardrails_client.py",
     "user_prompt_submit.py",
     "pre_tool_use.py",
-    "post_tool_use.py"
+    "post_tool_use.py",
+    "stop.py"
 )
 
 foreach ($file in $HookFiles) {
@@ -359,17 +405,19 @@ if (Test-Path $ManagedRequirements) {
 }
 
 $TomlHooksDir = Escape-TomlSingleQuoted $HooksDir
-$TomlPythonExe = Escape-TomlSingleQuoted $PythonExe
 
-$UserPromptScript = Escape-TomlSingleQuoted (Join-Path $HooksDir "user_prompt_submit.py")
-$PreToolScript = Escape-TomlSingleQuoted (Join-Path $HooksDir "pre_tool_use.py")
-$PostToolScript = Escape-TomlSingleQuoted (Join-Path $HooksDir "post_tool_use.py")
+$UserPromptCommandWindows = New-HookCommandWindows -PythonExe $PythonExe -ScriptPath (Join-Path $HooksDir "user_prompt_submit.py")
+$PreToolCommandWindows = New-HookCommandWindows -PythonExe $PythonExe -ScriptPath (Join-Path $HooksDir "pre_tool_use.py")
+$PostToolCommandWindows = New-HookCommandWindows -PythonExe $PythonExe -ScriptPath (Join-Path $HooksDir "post_tool_use.py")
+$StopCommandWindows = New-HookCommandWindows -PythonExe $PythonExe -ScriptPath (Join-Path $HooksDir "stop.py")
 
 # Important:
 # - Do not set allow_managed_hooks_only here. In testing, the stable Windows GUI path
 #   was managed hooks in requirements.toml plus no user hooks.json.
 # - Use command_windows and windows_managed_dir for native Windows Codex GUI.
 # - Use a broad matcher by default because GUI/app tool names are broader than Bash/apply_patch.
+# - Do not wrap command_windows components in double quotes. Codex Windows GUI
+#   has hung with quoted command strings; use 8.3 short paths when spaces exist.
 $ManagedToml = @"
 # Codex managed requirements for F5 AI Guardrails hooks.
 # Installed by install.ps1.
@@ -379,6 +427,8 @@ $ManagedToml = @"
 #   - user-level hooks.json is disabled by default to avoid duplicate scans
 #   - do not add allow_managed_hooks_only unless separately tested in your environment
 #   - PreToolUse/PostToolUse default to matcher = ".*" for the Windows GUI/app path
+#   - command_windows values intentionally avoid embedded quotes; install.ps1
+#     resolves 8.3 short paths when needed to avoid spaces
 
 [features]
 hooks = true
@@ -392,7 +442,7 @@ windows_managed_dir = '$TomlHooksDir'
 [[hooks.UserPromptSubmit.hooks]]
 type = "command"
 command = "python3 /enterprise/hooks/user_prompt_submit.py"
-command_windows = '$TomlPythonExe $UserPromptScript'
+command_windows = '$UserPromptCommandWindows'
 timeout = 15
 statusMessage = "F5 Guardrails: managed prompt scan"
 
@@ -402,7 +452,7 @@ matcher = "$ToolMatcher"
 [[hooks.PreToolUse.hooks]]
 type = "command"
 command = "python3 /enterprise/hooks/pre_tool_use.py"
-command_windows = '$TomlPythonExe $PreToolScript'
+command_windows = '$PreToolCommandWindows'
 timeout = 15
 statusMessage = "F5 Guardrails: managed tool-input scan"
 
@@ -412,9 +462,18 @@ matcher = "$ToolMatcher"
 [[hooks.PostToolUse.hooks]]
 type = "command"
 command = "python3 /enterprise/hooks/post_tool_use.py"
-command_windows = '$TomlPythonExe $PostToolScript'
+command_windows = '$PostToolCommandWindows'
 timeout = 15
 statusMessage = "F5 Guardrails: managed tool-output scan"
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "python3 /enterprise/hooks/stop.py"
+command_windows = '$StopCommandWindows'
+timeout = 15
+statusMessage = "F5 Guardrails: scanning assistant response"
 "@
 
 Set-Content -Path $ManagedRequirements -Value $ManagedToml -Encoding UTF8
@@ -473,6 +532,11 @@ Write-Host "  Managed requirements:      $ManagedRequirements"
 Write-Host "  User hooks.json:           $(if (Test-Path $HooksJson) { $HooksJson } else { 'disabled / absent by default' })"
 Write-Host "  Log file:                  $DefaultLogFile"
 Write-Host ""
+Write-Host "  Response scanning:"
+Write-Host "    Installed through the Codex Stop hook."
+Write-Host "    Scans Stop.last_assistant_message before display."
+Write-Host "    Local/client-side response scanning; not upstream model proxy enforcement."
+Write-Host ""
 Write-Host "  Required env var:"
 Write-Host '    F5_GUARDRAILS_API_TOKEN'
 Write-Host ""
@@ -491,6 +555,11 @@ Write-Host "    SSL_CERT_FILE                  OpenSSL/requests CA bundle"
 Write-Host ""
 Write-Host "  Managed PreToolUse/PostToolUse matcher:"
 Write-Host "    $ToolMatcher"
+Write-Host ""
+Write-Host "  To verify Stop hook execution:"
+Write-Host "    Set F5_GUARDRAILS_LOG_LEVEL=debug for detailed scan context."
+Write-Host "    Get-Content -Path `"$DefaultLogFile`" -Wait"
+Write-Host "    Look for: context=assistant_response, hook=Stop, Scan [assistant_response]"
 Write-Host ""
 Write-Host "  Restart Codex GUI / CLI for hooks to take effect."
 Write-Host ("=" * 72)
