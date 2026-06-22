@@ -622,3 +622,9 @@ Deliver hook scripts using Intune, SCCM, Group Policy, or your normal endpoint m
 - F5 AI Security API Docs: https://docs.aisecurity.f5.com/api-reference/
 - F5 Getting Started with AI Guardrails: https://docs.aisecurity.f5.com/api-docs/getting-started-defend.html
 - F5 Guardrails Integration Examples: https://github.com/f5devcentral/f5-ai-security-guardrail-integration-examples
+
+## License
+
+Copyright 2026 Andy Ryan.
+
+Licensed under the Apache License, Version 2.0. See the [LICENSE](LICENSE) file for details.
