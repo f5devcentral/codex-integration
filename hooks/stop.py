@@ -40,15 +40,18 @@ def _extract_last_assistant_message(hook_input: dict) -> str:
 
 
 def _emit_response_block(outcome: str) -> None:
+    reason = f"F5 Guardrails blocked assistant response ({outcome})"
+    message = (
+        "F5 Guardrails flagged the assistant response. "
+        "Try rephrasing your request or ask for a safer summary."
+    )
+
     emit_json(
         {
             "continue": False,
             "suppressOutput": True,
-            "stopReason": f"F5 Guardrails blocked assistant response ({outcome})",
-            "systemMessage": (
-                "F5 Guardrails blocked the assistant response before it was shown. "
-                "Try rephrasing your request or ask for a safer summary."
-            ),
+            "stopReason": reason,
+            "systemMessage": message,
         }
     )
 

@@ -1,6 +1,6 @@
 # Codex ↔ F5 AI Guardrails Integration
 
-Runtime security controls for OpenAI Codex. This integration scans user prompts, tool inputs, tool outputs, and final assistant responses through F5 AI Guardrails, powered by CalypsoAI, to help catch prompt injection, PII leakage, toxic content, and off-topic material before they cause damage.
+Runtime security controls for OpenAI Codex. This integration scans user prompts, tool inputs, and tool outputs through F5 AI Guardrails, powered by CalypsoAI, and inspects final assistant responses on a best-effort basis. It helps detect prompt injection, PII leakage, toxic content, and off-topic material at Codex lifecycle boundaries.
 
 > **Windows users:** native Windows support is included. The Windows installer uses PowerShell, but the smoke test is now a standalone Python script: `smoketest.py`.
 
@@ -37,10 +37,10 @@ Assistant response
   ↓
 [Stop hook]
   ↓
-F5 Scan API → suppress / allow
+F5 Scan API → detect / log / best-effort stop signal
 ```
 
-`Stop` hook response scanning is best-effort local/client-side enforcement over Codex's `last_assistant_message`. It is not an upstream model proxy and does not replace server-side policy controls.
+`Stop` hook response scanning is best-effort local/client-side inspection over Codex's `last_assistant_message`. Codex currently parses `suppressOutput` but does not implement output suppression, so the desktop app may display a flagged response before or despite the hook decision. Use this hook for detection and audit, not as a hard response-enforcement boundary. It is not an upstream model proxy and does not replace server-side policy controls.
 
 The hooks share a common Python client module, `f5_guardrails_client.py`, with timeout handling, fail-open / fail-closed behavior, and structured error handling.
 
@@ -156,7 +156,7 @@ The installer:
 
 - Copies hook scripts to your Codex hooks directory.
 - Installs or updates hook registration.
-- Enables `codex_hooks = true` in Codex config.
+- Enables `[features].hooks = true` in Codex config.
 - Adds `Stop` response scanning for `last_assistant_message`.
 - Runs a smoke test scan against F5 AI Guardrails.
 
@@ -186,6 +186,8 @@ codex-integration/
 ├── smoketest.py
 ├── hooks.json
 ├── hooks-windows.json
+├── scripts/
+│   └── dump_f5_guardrails_config.py
 └── hooks/
     ├── f5_guardrails_client.py
     ├── user_prompt_submit.py
@@ -251,6 +253,25 @@ Expected result:
 ```text
 [OK] Smoke test passed: cleared (732ms)
 ```
+
+## Redacted Configuration Dump
+
+For troubleshooting F5 project, provider, and API-token relationships, use the read-only configuration dump script with a global API token:
+
+```bash
+export F5_GLOBAL_API_TOKEN="your-global-token"
+python3 scripts/dump_f5_guardrails_config.py \
+  --base-url https://us1.calypsoai.app \
+  --project scheff-codex-agentic
+```
+
+The script reads `/backend/v1/providers`, `/backend/v1/projects`, and `/backend/v1/tokens`, plus provider relationships for each project. It writes:
+
+```text
+f5_guardrails_config_dump.redacted.json
+```
+
+Secret-like fields are redacted, and `f5_guardrails_config_dump*.json` is ignored by Git to reduce the risk of committing customer configuration data. Review the file before sharing it; names, IDs, project structure, and other non-secret metadata remain visible.
 
 ### Verbose HTTP debug
 
@@ -385,50 +406,52 @@ and updates:
 
 ```text
 %USERPROFILE%\.codex\config.toml
-%USERPROFILE%\.codex\hooks.json
+C:\ProgramData\OpenAI\Codex\requirements.toml
 ```
 
-### Windows inline TOML config
+The managed `requirements.toml` is the Windows GUI source of truth. The installer disables user-level `%USERPROFILE%\.codex\hooks.json` by default to avoid duplicate hook execution; use `-InstallUserHooksJson` only for the optional legacy/user-level path.
 
-For reliable hook discovery, add inline hook definitions to:
+### Windows managed TOML config
+
+The installer generates managed hook definitions in:
 
 ```text
-%USERPROFILE%\.codex\config.toml
+C:\ProgramData\OpenAI\Codex\requirements.toml
 ```
 
-Use `command_windows` for Windows commands:
+The following shows the generated shape. The actual installer pins the Python executable that passed the smoke test and resolves paths containing spaces to 8.3 short paths. Do not copy `%USERPROFILE%` into `command_windows`; environment-variable expansion is not guaranteed there.
 
 ```toml
 [features]
-codex_hooks = true
+hooks = true
 
 [[hooks.UserPromptSubmit]]
 [[hooks.UserPromptSubmit.hooks]]
 type = "command"
-command_windows = "python %USERPROFILE%\\.codex\\hooks\\f5_guardrails\\user_prompt_submit.py"
+command_windows = "C:\\Python\\python.exe C:\\CodexHooks\\f5_guardrails\\user_prompt_submit.py"
 timeout = 15
 statusMessage = "F5 Guardrails: scanning prompt"
 
 [[hooks.PreToolUse]]
-matcher = "Bash|apply_patch"
+matcher = ".*"
 [[hooks.PreToolUse.hooks]]
 type = "command"
-command_windows = "python %USERPROFILE%\\.codex\\hooks\\f5_guardrails\\pre_tool_use.py"
+command_windows = "C:\\Python\\python.exe C:\\CodexHooks\\f5_guardrails\\pre_tool_use.py"
 timeout = 15
 statusMessage = "F5 Guardrails: scanning tool input"
 
 [[hooks.PostToolUse]]
-matcher = "Bash|apply_patch"
+matcher = ".*"
 [[hooks.PostToolUse.hooks]]
 type = "command"
-command_windows = "python %USERPROFILE%\\.codex\\hooks\\f5_guardrails\\post_tool_use.py"
+command_windows = "C:\\Python\\python.exe C:\\CodexHooks\\f5_guardrails\\post_tool_use.py"
 timeout = 15
 statusMessage = "F5 Guardrails: scanning output"
 
 [[hooks.Stop]]
 [[hooks.Stop.hooks]]
 type = "command"
-command_windows = "python %USERPROFILE%\\.codex\\hooks\\f5_guardrails\\stop.py"
+command_windows = "C:\\Python\\python.exe C:\\CodexHooks\\f5_guardrails\\stop.py"
 timeout = 15
 statusMessage = "F5 Guardrails: scanning assistant response"
 ```
@@ -467,7 +490,7 @@ For ChatGPT Enterprise/Business workspaces, deploy from the Codex Policies admin
 
 ```toml
 [features]
-codex_hooks = true
+hooks = true
 
 [hooks]
 managed_dir = "/opt/enterprise/codex-hooks"
@@ -480,7 +503,7 @@ timeout = 15
 statusMessage = "F5 Guardrails: scanning prompt"
 
 [[hooks.PreToolUse]]
-matcher = "Bash|apply_patch"
+matcher = ".*"
 [[hooks.PreToolUse.hooks]]
 type = "command"
 command = "python3 /opt/enterprise/codex-hooks/f5_guardrails/pre_tool_use.py"
@@ -488,7 +511,7 @@ timeout = 15
 statusMessage = "F5 Guardrails: scanning tool input"
 
 [[hooks.PostToolUse]]
-matcher = "Bash|apply_patch"
+matcher = ".*"
 [[hooks.PostToolUse.hooks]]
 type = "command"
 command = "python3 /opt/enterprise/codex-hooks/f5_guardrails/post_tool_use.py"
@@ -567,7 +590,8 @@ Deliver hook scripts using Intune, SCCM, Group Policy, or your normal endpoint m
 
 - **Windows PreToolUse gap:** On native Windows, shell commands may dispatch as `command_execution` events rather than `Bash` tool calls. In that case, `PreToolUse` hooks do not fire for shell commands, even with `matcher = "*"`. `UserPromptSubmit` and `PostToolUse` are unaffected.
 - **File-read coverage gaps:** Some file-read and search tools may not emit hook events. Shell invocations such as `cat`, `grep`, and similar commands are covered when they flow through hook-enabled tool events.
-- **No input rewrite:** Hooks can block but not modify tool input. F5 redact mode is useful for reporting/logging, but Codex hook input is not rewritten in-place.
+- **Stop cannot reliably hide final output:** The hook can scan `last_assistant_message`, log a block decision, and emit `continue = false` / `suppressOutput = true`, but current Codex clients do not implement `suppressOutput`. A flagged assistant response may remain visible.
+- **No input rewrite in this integration:** Codex supports limited `PreToolUse` input updates for selected tools, but these F5 hook scripts currently allow or block; they do not rewrite tool input in place.
 - **Codex Cloud:** Web-based Codex runs in OpenAI-managed containers. Local hooks do not apply there. Use enterprise/compliance controls for post-hoc analysis and cloud policy enforcement.
 - **Latency:** Each hook adds a network round trip, often tens to hundreds of milliseconds. Timeout settings prevent indefinite stalls.
 - **Fail-open default:** If F5 is unreachable and `F5_GUARDRAILS_FAIL_MODE=open`, hooks allow execution. Use `closed` for stricter environments.
@@ -579,7 +603,7 @@ Deliver hook scripts using Intune, SCCM, Group Policy, or your normal endpoint m
 
 | Symptom | Likely Cause | Fix |
 |---|---|---|
-| Hook does not fire | Hooks not enabled or not discovered | Confirm `codex_hooks = true`; use inline TOML hook definitions. |
+| Hook does not fire | Hooks not enabled or not discovered | Confirm `[features].hooks = true`; on Windows verify managed `requirements.toml`. |
 | Scan works in CLI but not desktop app | GUI app cannot see shell environment variables | Use `launchctl setenv` on macOS and relaunch the app. |
 | Python cannot import `requests` or `truststore` | Dependencies not installed in the Python environment Codex is using | Run `python -m pip install -r requirements.txt`; confirm with `python -c "import requests, truststore"`. |
 | Python cannot import `f5_guardrails_client` | Hook directory not in Python path or files not copied | Re-run installer; confirm files exist under `.codex/hooks/f5_guardrails`. |
@@ -587,6 +611,7 @@ Deliver hook scripts using Intune, SCCM, Group Policy, or your normal endpoint m
 | Smoke test passes in browser but fails in Python | Browser/OS trust store differs from Python/certifi | On Windows use the system cert store via `truststore`; otherwise add the corporate root CA to a PEM bundle. |
 | Scan times out | F5 API unreachable or slow | Check network/proxy; increase `F5_GUARDRAILS_TIMEOUT`. |
 | Hook blocks but user sees no message | Desktop app does not render hook `systemMessage` | Verify in F5 dashboard; use CLI for visible block details. |
+| Stop scan is flagged but assistant output remains visible | Codex parses but does not currently implement `suppressOutput` | Treat Stop as detection/audit; use an upstream inference proxy for hard pre-display response enforcement. |
 
 ---
 

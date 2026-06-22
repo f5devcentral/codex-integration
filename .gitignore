@@ -34,6 +34,7 @@ ENV/
 *.pid
 *.tmp
 *.bak
+f5_guardrails_config_dump*.json
 
 # Local environment and secrets
 .env
